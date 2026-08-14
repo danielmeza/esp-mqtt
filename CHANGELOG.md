@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/espressif/esp-mqtt/compare/v1.1.0...v1.1.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **mqtt5:** Prevent OOB read from mqtt 5 property ([bfa16b9](https://github.com/espressif/esp-mqtt/commit/bfa16b9236f44443dba7b46e834a477d380ec759))
+
 ## [1.1.0](https://github.com/espressif/esp-mqtt/compare/v1.0.0...v1.1.0) (2026-07-30)
 
 
