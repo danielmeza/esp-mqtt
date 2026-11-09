@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2025 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2025-2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -63,6 +63,9 @@ typedef struct {
     bool subscribe_identifiers_available;
     bool shared_subscribe_available;
     char *response_info;
+    char *authentication_method;
+    char *authentication_data;
+    uint16_t authentication_data_len;
 } esp_mqtt5_connection_server_resp_property_t;
 
 typedef struct {
@@ -86,6 +89,9 @@ typedef struct {
     bool request_resp_info;
     bool request_problem_info;
     mqtt5_user_property_handle_t user_property;
+    char *authentication_method;
+    char *authentication_data;
+    uint16_t authentication_data_len;
 } esp_mqtt5_connection_property_storage_t;
 
 typedef struct {

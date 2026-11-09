@@ -673,6 +673,11 @@ mqtt_message_t *mqtt5_msg_connect(mqtt_connection_t *connection, mqtt_connect_in
     int properties_offset = connection->outbound_message.length;
     connection->outbound_message.length ++;
 
+    if (property->authentication_data && property->authentication_data_len && !property->authentication_method) {
+        ESP_LOGE(TAG, "Authentication data requires an authentication method");
+        return fail_message(connection);
+    }
+
     if (property->session_expiry_interval) {
         APPEND_CHECK(append_property(connection, MQTT5_PROPERTY_SESSION_EXPIRY_INTERVAL, 4, NULL,
                                      property->session_expiry_interval), fail_message(connection));
@@ -699,6 +704,16 @@ mqtt_message_t *mqtt5_msg_connect(mqtt_connection_t *connection, mqtt_connect_in
 
     if (property->request_problem_info) {
         APPEND_CHECK(append_property(connection, MQTT5_PROPERTY_REQUEST_PROBLEM_INFO, 1, NULL, 1), fail_message(connection));
+    }
+
+    if (property->authentication_method) {
+        APPEND_CHECK(append_property(connection, MQTT5_PROPERTY_AUTHENTICATION_METHOD, 2, property->authentication_method,
+                                     strlen(property->authentication_method)), fail_message(connection));
+
+        if (property->authentication_data && property->authentication_data_len) {
+            APPEND_CHECK(append_property(connection, MQTT5_PROPERTY_AUTHENTICATION_DATA, 2, property->authentication_data,
+                                         property->authentication_data_len), fail_message(connection));
+        }
     }
 
     if (property->user_property) {
@@ -1045,7 +1060,7 @@ esp_err_t mqtt5_msg_parse_connack_property(uint8_t *buffer, size_t buffer_len, m
             property_offset += len;
             continue;
 
-        case MQTT5_PROPERTY_AUTHENTICATION_METHOD: //only print now
+        case MQTT5_PROPERTY_AUTHENTICATION_METHOD: {
             if (!mqtt5_property_has_bytes(property_offset, 2, property_len)) {
                 return ESP_FAIL;
             }
@@ -1056,11 +1071,22 @@ esp_err_t mqtt5_msg_parse_connack_property(uint8_t *buffer, size_t buffer_len, m
                 return ESP_FAIL;
             }
 
-            ESP_LOGD(TAG, "MQTT5_PROPERTY_AUTHENTICATION_METHOD %.*s", len, &property[property_offset]);
+            char *auth_method = calloc(1, len + 1);
+
+            if (!auth_method) {
+                ESP_LOGE(TAG, "Failed to calloc %d data", len);
+                return ESP_FAIL;
+            }
+
+            memcpy(auth_method, &property[property_offset], len);
+            free(resp_property->authentication_method);
+            resp_property->authentication_method = auth_method;
             property_offset += len;
+            ESP_LOGD(TAG, "MQTT5_PROPERTY_AUTHENTICATION_METHOD %s", resp_property->authentication_method);
             continue;
+        }
 
-        case MQTT5_PROPERTY_AUTHENTICATION_DATA: //only print now
+        case MQTT5_PROPERTY_AUTHENTICATION_DATA: {
             if (!mqtt5_property_has_bytes(property_offset, 2, property_len)) {
                 return ESP_FAIL;
             }
@@ -1071,9 +1097,26 @@ esp_err_t mqtt5_msg_parse_connack_property(uint8_t *buffer, size_t buffer_len, m
                 return ESP_FAIL;
             }
 
+            char *auth_data = NULL;
+
+            if (len) {
+                auth_data = malloc(len);
+
+                if (!auth_data) {
+                    ESP_LOGE(TAG, "Failed to malloc %d data", len);
+                    return ESP_FAIL;
+                }
+
+                memcpy(auth_data, &property[property_offset], len);
+            }
+
+            free(resp_property->authentication_data);
+            resp_property->authentication_data = auth_data;
+            resp_property->authentication_data_len = len;
+            property_offset += len;
             ESP_LOGD(TAG, "MQTT5_PROPERTY_AUTHENTICATION_DATA length %d", len);
-            property_offset += len;
             continue;
+        }
 
         default:
             ESP_LOGW(TAG, "Unknown connack property id 0x%02x", property_id);

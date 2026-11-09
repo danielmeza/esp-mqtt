@@ -104,6 +104,9 @@ typedef struct {
     uint16_t correlation_data_len;               /*!< The length of correlation data */
     mqtt5_user_property_handle_t
     will_user_property;  /*!< The handle for will message user property, call function esp_mqtt5_client_set_user_property to set it */
+    const char *authentication_method;           /*!< Authentication method name for enhanced authentication, sent in CONNECT (NULL if unused) */
+    const char *authentication_data;             /*!< Binary authentication data, sent in CONNECT; requires authentication_method */
+    uint16_t authentication_data_len;            /*!< The length of authentication data */
 } esp_mqtt5_connection_property_config_t;
 
 /**
@@ -175,6 +178,10 @@ typedef struct {
     bool shared_subscribe_available;         /*!< true if the server supports shared subscriptions */
     const char *response_info;               /*!< Response information string for request/response (NULL if not provided) */
     int response_info_len;                   /*!< Length of response_info */
+    const char *authentication_method;       /*!< Authentication method returned by the server (NULL if not provided) */
+    int authentication_method_len;           /*!< Length of authentication_method */
+    const char *authentication_data;         /*!< Authentication data returned by the server (NULL if not provided) */
+    uint16_t authentication_data_len;        /*!< Length of authentication_data */
 } esp_mqtt5_server_resp_property_t;
 
 /**

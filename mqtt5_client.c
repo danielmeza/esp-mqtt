@@ -104,6 +104,13 @@ esp_err_t esp_mqtt5_parse_connack(esp_mqtt5_client_handle_t client, int *connect
     client->mqtt_state.in_buffer_read_len = 0;
     uint8_t ack_flag = 0;
     client->mqtt5_config->server_resp_property_info.receive_maximum = MQTT5_DEFAULT_RECEIVE_MAXIMUM;
+    free(client->mqtt5_config->server_resp_property_info.response_info);
+    client->mqtt5_config->server_resp_property_info.response_info = NULL;
+    free(client->mqtt5_config->server_resp_property_info.authentication_method);
+    client->mqtt5_config->server_resp_property_info.authentication_method = NULL;
+    free(client->mqtt5_config->server_resp_property_info.authentication_data);
+    client->mqtt5_config->server_resp_property_info.authentication_data = NULL;
+    client->mqtt5_config->server_resp_property_info.authentication_data_len = 0;
 
     if (mqtt5_msg_parse_connack_property(client->mqtt_state.in_buffer, len, &client->mqtt_state.
                                          connection.information, &client->mqtt5_config->connect_property_info, &client->mqtt5_config->server_resp_property_info,
@@ -127,6 +134,10 @@ esp_err_t esp_mqtt5_parse_connack(esp_mqtt5_client_handle_t client, int *connect
         dst->shared_subscribe_available = src->shared_subscribe_available;
         dst->response_info = src->response_info;
         dst->response_info_len = src->response_info ? strlen(src->response_info) : 0;
+        dst->authentication_method = src->authentication_method;
+        dst->authentication_method_len = src->authentication_method ? strlen(src->authentication_method) : 0;
+        dst->authentication_data = src->authentication_data;
+        dst->authentication_data_len = src->authentication_data_len;
         return ESP_OK;
     }
 
@@ -397,6 +408,10 @@ void esp_mqtt5_client_destory(esp_mqtt5_client_handle_t client)
             free(client->mqtt5_config->will_property_info.response_topic);
             free(client->mqtt5_config->will_property_info.correlation_data);
             free(client->mqtt5_config->server_resp_property_info.response_info);
+            free(client->mqtt5_config->server_resp_property_info.authentication_method);
+            free(client->mqtt5_config->server_resp_property_info.authentication_data);
+            free(client->mqtt5_config->connect_property_info.authentication_method);
+            free(client->mqtt5_config->connect_property_info.authentication_data);
             esp_mqtt5_client_delete_topic_alias(client->mqtt5_config->peer_topic_alias);
             esp_mqtt5_client_delete_user_property(client->mqtt5_config->connect_property_info.user_property);
             esp_mqtt5_client_delete_user_property(client->mqtt5_config->will_property_info.user_property);
@@ -797,6 +812,27 @@ esp_err_t esp_mqtt5_client_set_connect_property(esp_mqtt5_client_handle_t client
             memcpy(client->mqtt5_config->will_property_info.correlation_data, connect_property->correlation_data,
                    connect_property->correlation_data_len);
             client->mqtt5_config->will_property_info.correlation_data_len = connect_property->correlation_data_len;
+        }
+
+        if (connect_property->authentication_data && connect_property->authentication_data_len &&
+                !connect_property->authentication_method) {
+            ESP_LOGE(TAG, "Authentication data requires an authentication method");
+            MQTT_API_UNLOCK(client);
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        ESP_MEM_CHECK(TAG, esp_mqtt_set_if_config(connect_property->authentication_method,
+                                                  &client->mqtt5_config->connect_property_info.authentication_method), goto _mqtt_set_config_failed);
+
+        if (connect_property->authentication_data && connect_property->authentication_data_len) {
+            free(client->mqtt5_config->connect_property_info.authentication_data);
+            client->mqtt5_config->connect_property_info.authentication_data = NULL;
+            client->mqtt5_config->connect_property_info.authentication_data_len = 0;
+            char *auth_data = malloc(connect_property->authentication_data_len);
+            ESP_MEM_CHECK(TAG, auth_data, goto _mqtt_set_config_failed);
+            memcpy(auth_data, connect_property->authentication_data, connect_property->authentication_data_len);
+            client->mqtt5_config->connect_property_info.authentication_data = auth_data;
+            client->mqtt5_config->connect_property_info.authentication_data_len = connect_property->authentication_data_len;
         }
 
         if (connect_property->will_user_property) {
