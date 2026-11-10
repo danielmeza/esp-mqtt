@@ -86,3 +86,23 @@ const void *test_mqtt5_staged_publish_property(esp_mqtt_client_handle_t client)
 {
     return client->mqtt5_config->publish_property_info;
 }
+
+/* esp_mqtt5_client_set_connect_property() copies the caller's authentication
+   method and data into the client config, so the test has to read back what
+   the client kept. Comparing the stored pointer with the caller's buffer is
+   what separates "copied" from "aliased": an aliased pointer would dangle as
+   soon as the caller's buffer goes away. */
+const char *test_mqtt5_connect_auth_method(esp_mqtt_client_handle_t client)
+{
+    return client->mqtt5_config->connect_property_info.authentication_method;
+}
+
+const char *test_mqtt5_connect_auth_data(esp_mqtt_client_handle_t client)
+{
+    return client->mqtt5_config->connect_property_info.authentication_data;
+}
+
+uint16_t test_mqtt5_connect_auth_data_len(esp_mqtt_client_handle_t client)
+{
+    return client->mqtt5_config->connect_property_info.authentication_data_len;
+}

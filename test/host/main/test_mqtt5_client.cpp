@@ -5,6 +5,7 @@
  */
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <type_traits>
 
@@ -26,6 +27,9 @@ extern "C" {
     esp_err_t test_mqtt5_validate_publish_property(const esp_mqtt5_publish_property_config_t *property,
                                                    uint16_t topic_alias_maximum, esp_mqtt_protocol_ver_t protocol_ver);
     const void *test_mqtt5_staged_publish_property(esp_mqtt_client_handle_t client);
+    const char *test_mqtt5_connect_auth_method(esp_mqtt_client_handle_t client);
+    const char *test_mqtt5_connect_auth_data(esp_mqtt_client_handle_t client);
+    uint16_t test_mqtt5_connect_auth_data_len(esp_mqtt_client_handle_t client);
 
 #include "Mockesp_event.h"
 #include "Mockesp_timer.h"
@@ -63,6 +67,57 @@ static esp_err_t validate_unsubscribe(const esp_mqtt5_unsubscribe_property_confi
 static esp_err_t validate_publish(const esp_mqtt5_publish_property_config_t &property, uint16_t topic_alias_maximum = 10)
 {
     return test_mqtt5_validate_publish_property(&property, topic_alias_maximum, MQTT_PROTOCOL_V_5);
+}
+
+/* The CONNECT authentication properties are stored in the private mqtt5 config,
+   so the tests need a client built by esp_mqtt_client_init() rather than the
+   hand-filled structs the validators above use. Same mock preamble as the
+   SCENARIO below; the handles are only carried around by the mocks and never
+   dereferenced, so static storage keeps them valid for the whole run. */
+static unique_mqtt_client make_mqtt5_client()
+{
+    static int mutex;
+    static int transport_list;
+    static int transport;
+    static int event_group;
+    esp_timer_get_time_IgnoreAndReturn(0);
+    xQueueTakeMutexRecursive_IgnoreAndReturn(true);
+    xQueueGiveMutexRecursive_IgnoreAndReturn(true);
+    xQueueCreateMutex_ExpectAnyArgsAndReturn(reinterpret_cast<QueueHandle_t>(&mutex));
+    xEventGroupCreate_IgnoreAndReturn(reinterpret_cast<EventGroupHandle_t>(&event_group));
+    esp_transport_list_init_IgnoreAndReturn(reinterpret_cast<esp_transport_list_handle_t>(&transport_list));
+    esp_transport_tcp_init_IgnoreAndReturn(reinterpret_cast<esp_transport_handle_t>(&transport));
+    esp_transport_ssl_init_IgnoreAndReturn(reinterpret_cast<esp_transport_handle_t>(&transport));
+    esp_transport_ws_init_IgnoreAndReturn(reinterpret_cast<esp_transport_handle_t>(&transport));
+    esp_transport_ws_set_subprotocol_IgnoreAndReturn(ESP_OK);
+    esp_transport_list_add_IgnoreAndReturn(ESP_OK);
+    esp_transport_set_default_port_IgnoreAndReturn(ESP_OK);
+    esp_event_loop_create_IgnoreAndReturn(ESP_OK);
+    esp_event_loop_delete_IgnoreAndReturn(ESP_OK);
+    esp_transport_list_destroy_IgnoreAndReturn(ESP_OK);
+    esp_transport_destroy_IgnoreAndReturn(ESP_OK);
+    xTaskCreatePinnedToCore_IgnoreAndReturn(pdTRUE);
+    vEventGroupDelete_Ignore();
+    vQueueDelete_Ignore();
+    esp_mqtt_client_config_t config{};
+    config.broker.address.uri = "mqtt://1.1.1.1";
+    config.session.protocol_ver = MQTT_PROTOCOL_V_5;
+    return unique_mqtt_client{esp_mqtt_client_init(&config)};
+}
+
+/* Binary on purpose: a NUL and a high byte inside the payload make a copy that
+   stops at strlen() or at the first NUL visibly wrong. */
+static const char auth_data[] = {'\x00', '\x01', '\x7f', static_cast<char>(0xff), 'x'};
+
+static void require_auth_stored(esp_mqtt_client_handle_t client, const char *method)
+{
+    const char *stored_method = test_mqtt5_connect_auth_method(client);
+    const char *stored_data = test_mqtt5_connect_auth_data(client);
+    REQUIRE(stored_method != nullptr);
+    REQUIRE(std::strcmp(stored_method, method) == 0);
+    REQUIRE(stored_data != nullptr);
+    REQUIRE(test_mqtt5_connect_auth_data_len(client) == sizeof(auth_data));
+    REQUIRE(std::memcmp(stored_data, auth_data, sizeof(auth_data)) == 0);
 }
 
 TEST_CASE("MQTT5 inflight quota uses an exact upper bound")
@@ -217,4 +272,118 @@ SCENARIO("MQTT5 per-message publish property does not consume the staged one")
             }
         }
     }
+}
+
+TEST_CASE("MQTT5 CONNECT authentication method and data are copied into the client config")
+{
+    auto client = make_mqtt5_client();
+    REQUIRE(client != nullptr);
+    char method[] = "SCRAM-SHA-256";
+    esp_mqtt5_connection_property_config_t property = {};
+    property.authentication_method = method;
+    property.authentication_data = auth_data;
+    property.authentication_data_len = sizeof(auth_data);
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_OK);
+    const char *stored_method = test_mqtt5_connect_auth_method(client.get());
+    const char *stored_data = test_mqtt5_connect_auth_data(client.get());
+    // The caller's buffers are stack locals that die with this test, so a
+    // pointer the client kept instead of copying would dangle from here on.
+    // Identity is therefore part of the contract, not an implementation detail.
+    REQUIRE(stored_method != nullptr);
+    REQUIRE(stored_method != method);
+    REQUIRE(stored_data != nullptr);
+    REQUIRE(stored_data != auth_data);
+    require_auth_stored(client.get(), method);
+}
+
+TEST_CASE("MQTT5 CONNECT authentication values are replaced by a second call")
+{
+    auto client = make_mqtt5_client();
+    REQUIRE(client != nullptr);
+    char first_method[] = "SCRAM-SHA-256";
+    char second_method[] = "SCRAM-SHA-512";
+    const char second_data[] = {'\x10', '\x00', '\x20'};
+    // First call: a different method and a payload of a different length, so
+    // any state left behind by it is visible in the assertions below.
+    {
+        esp_mqtt5_connection_property_config_t property = {};
+        property.authentication_method = first_method;
+        property.authentication_data = auth_data;
+        property.authentication_data_len = sizeof(auth_data);
+        REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_OK);
+    }
+    require_auth_stored(client.get(), first_method);
+    esp_mqtt5_connection_property_config_t property = {};
+    property.authentication_method = second_method;
+    property.authentication_data = second_data;
+    property.authentication_data_len = sizeof(second_data);
+    // The previous copies are freed here; ASan reports a double free or an
+    // invalid one, and LSan a copy that was dropped instead of released.
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_OK);
+    const char *stored_method = test_mqtt5_connect_auth_method(client.get());
+    const char *stored_data = test_mqtt5_connect_auth_data(client.get());
+    REQUIRE(stored_method != nullptr);
+    REQUIRE(std::strcmp(stored_method, second_method) == 0);
+    REQUIRE(stored_data != nullptr);
+    REQUIRE(test_mqtt5_connect_auth_data_len(client.get()) == sizeof(second_data));
+    REQUIRE(std::memcmp(stored_data, second_data, sizeof(second_data)) == 0);
+}
+
+TEST_CASE("MQTT5 CONNECT authentication data without a method is rejected")
+{
+    auto client = make_mqtt5_client();
+    REQUIRE(client != nullptr);
+    esp_mqtt5_connection_property_config_t property = {};
+    property.authentication_data = auth_data;
+    property.authentication_data_len = sizeof(auth_data);
+    // MQTT 5.0 3.1.2.11.10: it is a Protocol Error to send Authentication Data
+    // with no Authentication Method.
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_ERR_INVALID_ARG);
+    // The rejected call stored nothing, so a later connect cannot send data
+    // whose method was never set.
+    REQUIRE(test_mqtt5_connect_auth_data(client.get()) == nullptr);
+    REQUIRE(test_mqtt5_connect_auth_data_len(client.get()) == 0);
+    REQUIRE(test_mqtt5_connect_auth_method(client.get()) == nullptr);
+    // Control: no data is not the same as data without a method.
+    property.authentication_data_len = 0;
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_OK);
+    // Control: the same data is accepted once a method says how to read it.
+    property.authentication_data = auth_data;
+    property.authentication_data_len = sizeof(auth_data);
+    property.authentication_method = "SCRAM-SHA-256";
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_OK);
+    require_auth_stored(client.get(), "SCRAM-SHA-256");
+}
+
+TEST_CASE("MQTT5 CONNECT property accepts a NULL property as a no-op")
+{
+    auto client = make_mqtt5_client();
+    REQUIRE(client != nullptr);
+    // A caller that passes NULL asks for "no properties". The validation for
+    // data-without-a-method used to sit above the `if (connect_property)`
+    // guard, so this call dereferenced NULL.
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), nullptr) == ESP_OK);
+    char method[] = "SCRAM-SHA-256";
+    esp_mqtt5_connection_property_config_t property = {};
+    property.authentication_method = method;
+    property.authentication_data = auth_data;
+    property.authentication_data_len = sizeof(auth_data);
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_OK);
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), nullptr) == ESP_OK);
+    // ... and it leaves what was configured before it untouched.
+    require_auth_stored(client.get(), method);
+}
+
+TEST_CASE("MQTT5 CONNECT authentication copies are released when the client is destroyed")
+{
+    // LeakSanitizer runs at process exit, so a copy this test leaves behind
+    // fails the run on its own; a double free would abort in this destructor.
+    auto client = make_mqtt5_client();
+    REQUIRE(client != nullptr);
+    esp_mqtt5_connection_property_config_t property = {};
+    property.authentication_method = "SCRAM-SHA-256";
+    property.authentication_data = auth_data;
+    property.authentication_data_len = sizeof(auth_data);
+    REQUIRE(esp_mqtt5_client_set_connect_property(client.get(), &property) == ESP_OK);
+    esp_mqtt_client_destroy(client.release());
 }
