@@ -96,7 +96,11 @@ static unique_mqtt_client make_mqtt5_client()
     esp_event_loop_delete_IgnoreAndReturn(ESP_OK);
     esp_transport_list_destroy_IgnoreAndReturn(ESP_OK);
     esp_transport_destroy_IgnoreAndReturn(ESP_OK);
-    xTaskCreatePinnedToCore_IgnoreAndReturn(pdTRUE);
+    /* No xTaskCreatePinnedToCore expectation is queued on purpose: only
+       esp_mqtt_client_start() creates the task, esp_mqtt_client_init() does not,
+       and these tests never start the client. CMock is not reset between test
+       cases, so a leftover instance would be popped by the next test that does
+       start a client, where it fails on a zero-argument Memory Mismatch. */
     vEventGroupDelete_Ignore();
     vQueueDelete_Ignore();
     esp_mqtt_client_config_t config{};
@@ -241,7 +245,7 @@ SCENARIO("MQTT5 per-message publish property does not consume the staged one")
     esp_event_loop_delete_IgnoreAndReturn(ESP_OK);
     esp_transport_list_destroy_IgnoreAndReturn(ESP_OK);
     esp_transport_destroy_IgnoreAndReturn(ESP_OK);
-    xTaskCreatePinnedToCore_IgnoreAndReturn(pdTRUE);
+    // No task expectation: the client is initialized but never started.
     vEventGroupDelete_Ignore();
     vQueueDelete_Ignore();
     GIVEN("A v5 client with a staged publish property") {
